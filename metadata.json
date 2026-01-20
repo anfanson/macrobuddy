@@ -1,0 +1,7 @@
+{
+  "name": "MacroTrack - Il tuo Diet Tracker Moderno",
+  "description": "Un'applicazione Single Page reattiva per il monitoraggio dei macronutrienti e delle calorie giornaliere, con database alimenti personalizzabile e feedback dinamico sugli obiettivi.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
