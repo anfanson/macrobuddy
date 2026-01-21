@@ -7,6 +7,7 @@ export interface Food {
   protein: number;
   fat: number;
   fiber: number;
+  tags?: string; // Es: "colazione", "pranzo, cena", "snack"
 }
 
 export interface RecipeIngredient {

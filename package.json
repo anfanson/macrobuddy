@@ -13,6 +13,7 @@
     "react-dom": "^19.2.3",
     "@heroicons/react": "^2.2.0",
     "html5-qrcode": "^2.3.8",
+    "papaparse": "5.4.1",
     "recharts": "^2.15.0",
     "clsx": "^2.1.1",
     "tailwind-merge": "^2.3.0"
