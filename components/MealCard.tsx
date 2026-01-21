@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Food, MealEntry, MealType, Recipe } from '../types';
-import { PlusIcon, TrashIcon, XMarkIcon, BookmarkIcon, CheckIcon } from '@heroicons/react/24/solid';
+import { Food, MealEntry, MealType, Recipe, CalculatedNutrients } from '../types';
+import { PlusIcon, TrashIcon, XMarkIcon, BookmarkIcon, CheckIcon, CalculatorIcon, ScaleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/solid';
 
 interface MealCardProps {
   type: MealType;
@@ -10,6 +10,7 @@ interface MealCardProps {
   entries: MealEntry[];
   foods: Food[];
   recipes: Recipe[];
+  residuals?: CalculatedNutrients;
   onAdd: (type: MealType, foodId: string, weight: number) => void;
   onUpdate: (type: MealType, entryId: string, weight: number) => void;
   onAddRecipe: (type: MealType, recipeId: string) => void;
@@ -18,20 +19,24 @@ interface MealCardProps {
 }
 
 const MealCard: React.FC<MealCardProps> = ({ 
-  type, title, icon, entries, foods, recipes, onAdd, onUpdate, onAddRecipe, onDelete, onSaveAsRecipe 
+  type, title, icon, entries, foods, recipes, residuals, onAdd, onUpdate, onAddRecipe, onDelete, onSaveAsRecipe 
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [addMode, setAddMode] = useState<'food' | 'recipe'>('food');
   const [selectedId, setSelectedId] = useState('');
-  const [weight, setWeight] = useState<string | number>(''); // Empty by default
+  const [weight, setWeight] = useState<string | number>(''); 
   const [isSavingRecipe, setIsSavingRecipe] = useState(false);
   const [newRecipeName, setNewRecipeName] = useState('');
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [editWeight, setEditWeight] = useState<string | number>(0);
 
+  // Optimizer State
+  const [showOptimizer, setShowOptimizer] = useState(false);
+  const [optimizedValues, setOptimizedValues] = useState<{id: string, weight: number}[]>([]);
+  const [optimizationPreview, setOptimizationPreview] = useState<{percent: number, msg: string, isError?: boolean} | null>(null);
+
   const weightInputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-select first item and focus weight input when adding
   useEffect(() => {
     if (isAdding) {
       if (addMode === 'food' && foods.length > 0) {
@@ -39,7 +44,6 @@ const MealCard: React.FC<MealCardProps> = ({
       } else if (addMode === 'recipe' && recipes.length > 0) {
         if (!selectedId) setSelectedId(recipes[0].id);
       }
-      // Delay focus slightly to ensure render complete
       setTimeout(() => weightInputRef.current?.focus(), 100);
     }
   }, [isAdding, addMode, foods, recipes, selectedId]);
@@ -56,6 +60,174 @@ const MealCard: React.FC<MealCardProps> = ({
     return acc;
   }, { kcal: 0, carbs: 0, protein: 0, fat: 0 });
 
+  // --- ADVANCED GRAM OPTIMIZER LOGIC ---
+  const calculateOptimalGrams = () => {
+    if (!residuals || entries.length === 0) return;
+
+    // 1. Setup Iniziale
+    // Mappiamo gli alimenti attuali. 
+    // WorkingWeights parte dai grammi attuali (VINCOLO: Non scendere sotto).
+    const workingSet = entries.map(e => {
+        const food = foods.find(f => f.id === e.foodId);
+        return { 
+            id: e.id, 
+            food, 
+            weight: e.weightGrams || 0, // Base di partenza
+            locked: false // Futuro: se l'utente bloccasse un cibo
+        };
+    }).filter(item => item.food !== undefined) as { id: string, food: Food, weight: number, locked: boolean }[];
+
+    // Limiti e Tolleranze
+    const MAX_WEIGHT_PER_FOOD = 400; // g
+    const TOLERANCE_MACRO = 5; // g
+    const TOLERANCE_KCAL = 50; // kcal
+    const MAX_ITERATIONS = 200; // Evita loop infiniti
+
+    let currentIter = 0;
+    
+    // Funzione helper per calcolare i totali attuali della simulazione
+    const getCurrentSimulatedTotals = () => {
+        return workingSet.reduce((acc, item) => {
+            const f = item.food;
+            const ratio = item.weight / 100;
+            acc.kcal += f.kcal * ratio;
+            acc.p += f.protein * ratio;
+            acc.c += f.carbs * ratio;
+            acc.f += f.fat * ratio;
+            return acc;
+        }, { kcal: 0, p: 0, c: 0, f: 0 });
+    };
+
+    // --- ALGORITMO ITERATIVO ---
+    while (currentIter < MAX_ITERATIONS) {
+        const sim = getCurrentSimulatedTotals();
+        
+        // Calcola Gap (Residui TOTALI Giornalieri - Totale Pasto Attuale Simulato)
+        // Nota: residuals passato come prop è (TargetTotale - ConsumatoAltriPasti - ConsumatoQuestoPastoOriginale).
+        // Quindi dobbiamo confrontare i gap rispetto a quanto stiamo AGGIUNGENDO rispetto all'originale.
+        // Semplificazione: L'obiettivo è colmare 'residuals' + mealTotals (perché residuals è calcolato SOTTRAENDO il mealTotals corrente in App.tsx).
+        // Ricalcoliamo il "Target Assoluto Mancante" da coprire con QUESTO pasto.
+        const targetForThisMeal = {
+            kcal: residuals.kcal + mealTotals.kcal,
+            p: residuals.protein + mealTotals.protein,
+            c: residuals.carbs + mealTotals.carbs,
+            f: residuals.fat + mealTotals.fat
+        };
+
+        const gapP = targetForThisMeal.p - sim.p;
+        const gapC = targetForThisMeal.c - sim.c;
+        const gapF = targetForThisMeal.f - sim.f;
+        const gapKcal = targetForThisMeal.kcal - sim.kcal;
+
+        // Condizioni di Stop (Target raggiunti o sforati troppo)
+        if (gapP <= TOLERANCE_MACRO && gapC <= TOLERANCE_MACRO && gapF <= TOLERANCE_MACRO && gapKcal <= TOLERANCE_KCAL) {
+            break; // Ottimo!
+        }
+        if (gapKcal < -TOLERANCE_KCAL) {
+            break; // Stiamo sforando le calorie, fermati.
+        }
+
+        let actionTaken = false;
+
+        // Strategia di Incremento
+        // 1. Priorità PROTEINE
+        if (gapP > TOLERANCE_MACRO) {
+            // Trova cibo con miglior rapporto Proteine/Kcal (o pure proteine) che non sia al limite
+            const bestP = workingSet
+                .filter(w => w.weight < MAX_WEIGHT_PER_FOOD)
+                .sort((a, b) => (b.food.protein / (b.food.kcal || 1)) - (a.food.protein / (a.food.kcal || 1)))[0];
+            
+            if (bestP) {
+                bestP.weight += 5; // Step 5g
+                actionTaken = true;
+            }
+        } 
+        // 2. Priorità GRASSI (sono densi, occhio)
+        else if (gapF > TOLERANCE_MACRO) {
+            const bestF = workingSet
+                .filter(w => w.weight < MAX_WEIGHT_PER_FOOD)
+                .sort((a, b) => b.food.fat - a.food.fat)[0];
+            
+            if (bestF) {
+                bestF.weight += 2; // Step 2g (più cauto)
+                actionTaken = true;
+            }
+        }
+        // 3. Priorità CARBOIDRATI
+        else if (gapC > TOLERANCE_MACRO) {
+            const bestC = workingSet
+                .filter(w => w.weight < MAX_WEIGHT_PER_FOOD)
+                .sort((a, b) => b.food.carbs - a.food.carbs)[0];
+            
+            if (bestC) {
+                bestC.weight += 5; // Step 5g
+                actionTaken = true;
+            }
+        }
+        // 4. Riempimento CALORIE (Se macro ok ma mancano kcal)
+        else if (gapKcal > TOLERANCE_KCAL) {
+             // Aumenta cibo con meno impatto sui macro già pieni o bilanciato
+             const filler = workingSet
+                .filter(w => w.weight < MAX_WEIGHT_PER_FOOD)
+                .sort((a, b) => a.food.kcal - b.food.kcal)[0]; // Quello meno calorico per volume? No, meglio quello che piace. 
+                // Usiamo quello con più calorie per chiudere prima
+             if (filler) {
+                 filler.weight += 5;
+                 actionTaken = true;
+             }
+        }
+
+        if (!actionTaken) break; // Non possiamo aggiungere altro
+        currentIter++;
+    }
+
+    // --- ANALISI RISULTATO E MESSAGGI ---
+    const finalSim = getCurrentSimulatedTotals();
+    const finalTarget = {
+        kcal: residuals.kcal + mealTotals.kcal,
+        p: residuals.protein + mealTotals.protein,
+        c: residuals.carbs + mealTotals.carbs,
+        f: residuals.fat + mealTotals.fat
+    };
+    
+    const missingP = finalTarget.p - finalSim.p;
+    const missingC = finalTarget.c - finalSim.c;
+    const missingF = finalTarget.f - finalSim.f;
+
+    let msg = "Grammature ottimizzate con successo.";
+    let isError = false;
+
+    if (missingP > 10) {
+        msg = "Impossibile bilanciare le Proteine con questi cibi. Aggiungi una fonte proteica.";
+        isError = true;
+    } else if (missingC > 20) {
+        msg = "Mancano Carboidrati. Aggiungi riso, pasta o patate.";
+        isError = true;
+    } else if (missingF > 15) {
+        msg = "Grassi bassi. Aggiungi olio o frutta secca.";
+        isError = true;
+    } else if (finalSim.kcal > finalTarget.kcal + 100) {
+        msg = "Attenzione: per raggiungere i macro sforerai le calorie.";
+        isError = true;
+    }
+
+    // Output
+    setOptimizedValues(workingSet.map(w => ({ id: w.id, weight: w.weight })));
+    
+    // Calcolo Percentuale copertura calorie
+    const percentCovered = Math.min(100, (finalSim.kcal / (finalTarget.kcal || 1)) * 100);
+
+    setOptimizationPreview({ percent: percentCovered, msg, isError });
+    setShowOptimizer(true);
+  };
+
+  const applyOptimization = () => {
+    optimizedValues.forEach(v => {
+        onUpdate(type, v.id, v.weight);
+    });
+    setShowOptimizer(false);
+  };
+
   const handleAddAction = () => {
     if (!selectedId) return;
     if (addMode === 'food') {
@@ -65,7 +237,7 @@ const MealCard: React.FC<MealCardProps> = ({
     }
     setIsAdding(false);
     setSelectedId('');
-    setWeight(''); // Reset to empty
+    setWeight(''); 
   };
 
   const handleSaveRecipe = () => {
@@ -93,7 +265,7 @@ const MealCard: React.FC<MealCardProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200">
+    <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-200 relative overflow-hidden">
       {/* Header with improved contrast */}
       <div className="flex justify-between items-center mb-6">
         <div className="flex items-center gap-3">
@@ -113,13 +285,69 @@ const MealCard: React.FC<MealCardProps> = ({
             </button>
           )}
           <button 
-            onClick={() => { setIsAdding(!isAdding); setIsSavingRecipe(false); }} 
+            onClick={() => { setIsAdding(!isAdding); setIsSavingRecipe(false); setShowOptimizer(false); }} 
             className="p-2.5 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 transition-all shadow-md active:scale-95"
           >
             {isAdding ? <XMarkIcon className="w-5 h-5" /> : <PlusIcon className="w-5 h-5" />}
           </button>
         </div>
       </div>
+
+      {/* GRAM OPTIMIZER UI */}
+      {type === 'cena' && residuals && entries.length > 0 && !isAdding && (
+        <div className="mb-6">
+            {!showOptimizer ? (
+               <button 
+                 onClick={calculateOptimalGrams}
+                 className="w-full py-3 bg-slate-800 text-white rounded-xl shadow-md flex items-center justify-center gap-2 hover:bg-slate-900 transition-all border border-slate-600 active:scale-[0.98]"
+               >
+                 <ScaleIcon className="w-5 h-5 text-emerald-400" />
+                 <span className="font-bold text-xs uppercase tracking-widest">Calcola Grammi Ottimali</span>
+               </button>
+            ) : (
+               <div className={`border rounded-2xl p-4 animate-in zoom-in duration-200 ${optimizationPreview?.isError ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200'}`}>
+                   <div className="flex justify-between items-start mb-3">
+                       <div className={`flex items-center gap-2 ${optimizationPreview?.isError ? 'text-rose-900' : 'text-indigo-900'}`}>
+                           {optimizationPreview?.isError ? <ExclamationTriangleIcon className="w-5 h-5"/> : <CalculatorIcon className="w-5 h-5" />}
+                           <h4 className="font-black text-xs uppercase tracking-widest">Anteprima Calcolo</h4>
+                       </div>
+                       <button onClick={() => setShowOptimizer(false)} className="text-slate-400 hover:text-slate-600"><XMarkIcon className="w-5 h-5"/></button>
+                   </div>
+
+                   <p className={`text-[11px] font-bold mb-3 leading-tight ${optimizationPreview?.isError ? 'text-rose-700' : 'text-slate-600'}`}>
+                       {optimizationPreview?.msg}
+                   </p>
+
+                   {/* Preview Grid */}
+                   <div className="space-y-2 mb-4">
+                       {optimizedValues.map(opt => {
+                           const f = foods.find(food => food.id === entries.find(e => e.id === opt.id)?.foodId);
+                           if (!f) return null;
+                           const originalWeight = entries.find(e => e.id === opt.id)?.weightGrams || 0;
+                           const diff = opt.weight - originalWeight;
+
+                           return (
+                               <div key={opt.id} className="flex justify-between items-center text-xs bg-white p-2 rounded-lg border border-slate-200 shadow-sm">
+                                   <span className="font-bold text-slate-700 truncate mr-2">{f.name}</span>
+                                   <div className="flex items-center gap-2">
+                                       <span className="text-slate-400 text-[10px]">{originalWeight}g</span>
+                                       {diff > 0 && <span className="text-[9px] text-emerald-500 font-black">+{diff}</span>}
+                                       <span className="text-emerald-700 font-black bg-emerald-100 px-1.5 py-0.5 rounded">{opt.weight}g</span>
+                                   </div>
+                               </div>
+                           )
+                       })}
+                   </div>
+                   
+                   <button onClick={applyOptimization} className="w-full py-2.5 bg-emerald-600 text-white rounded-lg font-black text-xs uppercase tracking-widest hover:bg-emerald-700 shadow-md flex items-center justify-center gap-2">
+                       <CheckIcon className="w-4 h-4" /> Applica Valori
+                   </button>
+               </div>
+            )}
+        </div>
+      )}
+
+      {/* ... Existing Recipe/Add Logic ... */}
 
       {isSavingRecipe && (
         <div className="mb-6 p-5 bg-amber-50 rounded-2xl border border-amber-200 animate-in slide-in-from-top-2 duration-200 shadow-inner">

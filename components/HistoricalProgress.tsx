@@ -1,6 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { HistoryEntry, MacroTargets, Food, Recipe, DayMeals, MealEntry } from '../types';
+import { ChevronLeftIcon, ChevronRightIcon, CalendarDaysIcon } from '@heroicons/react/24/solid';
 
 interface HistoricalProgressProps {
   history: HistoryEntry[];
@@ -13,19 +14,28 @@ const HistoricalProgress: React.FC<HistoricalProgressProps> = ({ history, target
   const [activeMacro, setActiveMacro] = useState<keyof HistoryEntry>('kcal');
   const [selectedDate, setSelectedDate] = useState<string | null>(new Date().toISOString().split('T')[0]);
   const [selectedDayMeals, setSelectedDayMeals] = useState<DayMeals | null>(null);
+  
+  // Gestione Navigazione Settimanale
+  // 0 = Settimana Corrente, -1 = Settimana Scorsa, etc.
+  const [weekOffset, setWeekOffset] = useState(0);
 
-  // Calcolo Settimana Corrente
-  const { weekDays, headerString } = useMemo(() => {
-    const curr = new Date();
-    const currentDay = curr.getDay(); // 0 (Dom) - 6 (Sab)
+  // Calcolo Settimana Dinamica basata su weekOffset
+  const { weekDays, headerString, isCurrentWeek } = useMemo(() => {
+    // 1. Determina la data "Ancora" in base all'offset
+    const anchorDate = new Date();
+    anchorDate.setDate(anchorDate.getDate() + (weekOffset * 7));
+
+    // 2. Calcola il Lunedì della settimana relativa all'ancora
+    const currentDay = anchorDate.getDay(); // 0 (Dom) - 6 (Sab)
     const distanceToMonday = currentDay === 0 ? 6 : currentDay - 1;
     
-    const monday = new Date(curr);
-    monday.setDate(curr.getDate() - distanceToMonday);
+    const monday = new Date(anchorDate);
+    monday.setDate(anchorDate.getDate() - distanceToMonday);
 
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
 
+    // 3. Genera le stringhe ISO per i 7 giorni
     const days = [];
     for (let i = 0; i < 7; i++) {
       const d = new Date(monday);
@@ -33,23 +43,32 @@ const HistoricalProgress: React.FC<HistoricalProgressProps> = ({ history, target
       days.push(d.toISOString().split('T')[0]);
     }
 
+    // 4. Formattazione Stringa Header
     const fmt = (d: Date) => d.getDate();
-    const month = sunday.toLocaleDateString('it-IT', { month: 'short' }).toUpperCase();
+    const monthStart = monday.toLocaleDateString('it-IT', { month: 'short' }).toUpperCase();
+    const monthEnd = sunday.toLocaleDateString('it-IT', { month: 'short' }).toUpperCase();
     
+    // Se il mese cambia durante la settimana, mostriamoli entrambi (es. 29 GIU - 05 LUG)
+    const monthString = monthStart === monthEnd ? monthStart : `${monthStart}/${monthEnd}`;
+
     return {
       weekDays: days,
-      headerString: `LUN ${fmt(monday)} - DOM ${fmt(sunday)} ${month}`
+      headerString: `LUN ${fmt(monday)} - DOM ${fmt(sunday)} ${monthString}`,
+      isCurrentWeek: weekOffset === 0
     };
-  }, []);
+  }, [weekOffset]);
 
-  // Preparazione Dati Settimanali
+  // Preparazione Dati Settimanali (Mapping tra giorni calcolati e Storia salvata)
   const weeklyData = useMemo(() => {
     return weekDays.map(dateStr => {
+      // Cerca se esiste un'entry nella storia per questa data specifica
       const entry = history.find(h => h.date === dateStr);
       const dateObj = new Date(dateStr);
+      
       return {
         date: dateStr,
         dayLabel: dateObj.toLocaleDateString('it-IT', { weekday: 'short' }).toUpperCase().replace('.', ''),
+        // Se non c'è entry (es. è lunedì mattina e non ho loggato nulla), il valore è 0 (Reset Visivo)
         val: entry ? (entry[activeMacro] as number) : 0,
         hasData: !!entry
       };
@@ -127,9 +146,34 @@ const HistoricalProgress: React.FC<HistoricalProgressProps> = ({ history, target
   return (
     <div className="space-y-6 pb-20">
       
-      {/* Header Settimanale */}
-      <div className="flex flex-col items-center pt-2">
-        <h2 className="text-xl font-black text-slate-900 tracking-tight uppercase">{headerString}</h2>
+      {/* Header Settimanale con Navigazione */}
+      <div className="flex justify-between items-center px-2 pt-2">
+        <button 
+          onClick={() => setWeekOffset(prev => prev - 1)}
+          className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-all"
+        >
+          <ChevronLeftIcon className="w-6 h-6" />
+        </button>
+
+        <div className="flex flex-col items-center">
+          <h2 className="text-xl font-black text-slate-900 tracking-tight uppercase">{headerString}</h2>
+          {!isCurrentWeek && (
+            <button 
+              onClick={() => setWeekOffset(0)}
+              className="flex items-center gap-1 text-[10px] font-bold text-indigo-500 uppercase tracking-widest mt-1 hover:text-indigo-700"
+            >
+              <CalendarDaysIcon className="w-3 h-3" /> Torna a oggi
+            </button>
+          )}
+        </div>
+
+        <button 
+          onClick={() => setWeekOffset(prev => prev + 1)}
+          className={`p-2 rounded-full transition-all ${isCurrentWeek ? 'text-slate-200 cursor-not-allowed' : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'}`}
+          disabled={isCurrentWeek}
+        >
+          <ChevronRightIcon className="w-6 h-6" />
+        </button>
       </div>
 
       {/* Selettore Macro (Segmented Control Style) */}
@@ -186,12 +230,13 @@ const HistoricalProgress: React.FC<HistoricalProgressProps> = ({ history, target
              const heightPct = (day.val / maxVal) * 100;
              const isOver = day.val > config.target;
              const isSelected = selectedDate === day.date;
+             const isFuture = new Date(day.date) > new Date() && day.val === 0;
              
              return (
                <div 
                  key={day.date} 
-                 onClick={() => setSelectedDate(day.date)}
-                 className="flex-1 h-full flex flex-col justify-end items-center group cursor-pointer"
+                 onClick={() => !isFuture && setSelectedDate(day.date)}
+                 className={`flex-1 h-full flex flex-col justify-end items-center group ${isFuture ? 'opacity-30 cursor-default' : 'cursor-pointer'}`}
                >
                   {/* Etichetta Valore (Float) */}
                   <div className={`mb-1.5 text-[9px] font-black tracking-tight transition-all duration-300 transform ${
@@ -239,7 +284,7 @@ const HistoricalProgress: React.FC<HistoricalProgressProps> = ({ history, target
                     <div>
                         <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-0.5">Riepilogo</p>
                         <h3 className="text-sm font-black text-slate-900 uppercase leading-none">
-                        {new Date(selectedDate).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric' })}
+                        {new Date(selectedDate).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' })}
                         </h3>
                     </div>
                 </div>

@@ -1,8 +1,9 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Food, Recipe, RecipeIngredient } from '../types';
-import { PlusIcon, TrashIcon, MagnifyingGlassIcon, QrCodeIcon, FireIcon, BeakerIcon, ChevronDownIcon, ChevronUpIcon, PencilSquareIcon, CheckIcon, XMarkIcon, ExclamationCircleIcon, ArrowPathIcon } from '@heroicons/react/24/solid';
+import { PlusIcon, TrashIcon, MagnifyingGlassIcon, QrCodeIcon, FireIcon, BeakerIcon, ChevronDownIcon, ChevronUpIcon, PencilSquareIcon, CheckIcon, XMarkIcon, ExclamationCircleIcon, ArrowPathIcon, ArrowUpTrayIcon, TagIcon } from '@heroicons/react/24/solid';
 import BarcodeScanner from './BarcodeScanner';
+import Papa from 'papaparse';
 
 interface FoodManagerProps {
   foods: Food[];
@@ -25,20 +26,29 @@ const FoodManager: React.FC<FoodManagerProps> = ({
   const [isSearchingApi, setIsSearchingApi] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
 
+  // CSV Import State
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Editing States
   const [editingRecipeId, setEditingRecipeId] = useState<string | null>(null);
   const [expandedRecipeId, setExpandedRecipeId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   
-  // Manual Form State - Initialized with strings/empty values
+  // Manual Form State
   const [formData, setFormData] = useState({
-    name: '', kcal: '' as string | number, carbs: '' as string | number, protein: '' as string | number, fat: '' as string | number, fiber: '' as string | number
+    name: '', 
+    kcal: '' as string | number, 
+    carbs: '' as string | number, 
+    protein: '' as string | number, 
+    fat: '' as string | number, 
+    fiber: '' as string | number,
+    tags: '' // Campo per i tag (es. "colazione, cena")
   });
 
   const [recipeName, setRecipeName] = useState('');
   const [recipeIngredients, setRecipeIngredients] = useState<RecipeIngredient[]>([]);
   const [tempFoodId, setTempFoodId] = useState('');
-  const [tempWeight, setTempWeight] = useState<string | number>(''); // Empty by default
+  const [tempWeight, setTempWeight] = useState<string | number>(''); 
 
   const [editingIngredientIdx, setEditingIngredientIdx] = useState<number | null>(null);
   const [editIngWeight, setEditIngWeight] = useState<string | number>('');
@@ -68,9 +78,10 @@ const FoodManager: React.FC<FoodManagerProps> = ({
       carbs: Number(formData.carbs) || 0,
       protein: Number(formData.protein) || 0,
       fat: Number(formData.fat) || 0,
-      fiber: Number(formData.fiber) || 0
+      fiber: Number(formData.fiber) || 0,
+      tags: formData.tags
     });
-    setFormData({ name: '', kcal: '', carbs: '', protein: '', fat: '', fiber: '' });
+    setFormData({ name: '', kcal: '', carbs: '', protein: '', fat: '', fiber: '', tags: '' });
     setIsFormOpen(false);
     setScanError(null);
   };
@@ -116,7 +127,7 @@ const FoodManager: React.FC<FoodManagerProps> = ({
   const addIngredientToRecipe = () => {
     if (!tempFoodId) return;
     setRecipeIngredients([...recipeIngredients, { foodId: tempFoodId, weightGrams: Number(tempWeight) || 100 }]);
-    setTempWeight(''); // Reset to empty
+    setTempWeight(''); 
   };
 
   const removeIngredientFromRecipe = (idx: number) => {
@@ -136,18 +147,83 @@ const FoodManager: React.FC<FoodManagerProps> = ({
     setEditingIngredientIdx(null);
   };
 
+  // --- LOGICA CSV IMPORT ---
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const parseNumberItalian = (val: any): number => {
+    if (typeof val === 'number') return val;
+    if (!val) return 0;
+    const str = String(val).trim();
+    // Sostituisce la virgola con il punto e rimuove caratteri non numerici (eccetto punto)
+    const normalized = str.replace(',', '.').replace(/[^0-9.]/g, '');
+    return parseFloat(normalized) || 0;
+  };
+
+  const findKey = (row: any, candidates: string[]) => {
+    const keys = Object.keys(row);
+    for (const cand of candidates) {
+      const match = keys.find(k => k.toLowerCase().includes(cand.toLowerCase()));
+      if (match) return row[match];
+    }
+    return null;
+  };
+
+  const handleImportCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results: any) => {
+        let addedCount = 0;
+        
+        results.data.forEach((row: any) => {
+          // Mappatura flessibile delle colonne
+          const name = findKey(row, ['nome', 'name', 'alimento', 'prodotto']);
+          
+          if (name) {
+            const food: Food = {
+              id: crypto.randomUUID(),
+              name: String(name).trim(),
+              kcal: parseNumberItalian(findKey(row, ['kcal', 'calorie', 'energy', 'energia'])),
+              protein: parseNumberItalian(findKey(row, ['prot', 'protein'])),
+              carbs: parseNumberItalian(findKey(row, ['carb', 'carbo'])),
+              fat: parseNumberItalian(findKey(row, ['fat', 'grassi', 'lipidi'])),
+              fiber: parseNumberItalian(findKey(row, ['fib', 'fiber'])),
+              // Mappa colonne tags
+              tags: String(findKey(row, ['pasto', 'tags', 'categoria', 'momento', 'category']) || '')
+            };
+
+            onAdd(food);
+            addedCount++;
+          }
+        });
+
+        if (addedCount > 0) {
+            alert(`Importati con successo ${addedCount} alimenti!`);
+        } else {
+            alert("Nessun alimento valido trovato nel CSV. Controlla le intestazioni (Nome, Kcal, ecc).");
+        }
+      },
+      error: (err: any) => {
+        console.error("Errore CSV:", err);
+        alert("Errore durante la lettura del file CSV.");
+      }
+    });
+
+    // Reset input
+    e.target.value = '';
+  };
+
   // LOGICA DI SCANSIONE E FETCH
   const handleBarcodeScan = async (barcode: string) => {
     console.log("Inizio gestione codice:", barcode);
-    
-    // 1. Chiudi lo scanner immediatamente per evitare blocchi
     setIsScannerOpen(false);
-    
-    // 2. Attiva stato di caricamento UI
     setIsSearchingApi(true);
     setScanError(null);
-    
-    // Se il form non è aperto, aprilo in modalità loading
     setIsFormOpen(true);
     setManagerMode('foods');
 
@@ -161,19 +237,18 @@ const FoodManager: React.FC<FoodManagerProps> = ({
         const product = data.product;
         const nuts = product.nutriments;
         
-        // 3. Compilazione Automatica Form
         setFormData({
           name: product.product_name || `Prodotto ${barcode}`,
           kcal: Number(nuts['energy-kcal_100g']) || 0,
           carbs: Number(nuts.carbohydrates_100g) || 0,
           protein: Number(nuts.proteins_100g) || 0,
           fat: Number(nuts.fat_100g) || 0,
-          fiber: Number(nuts.fiber_100g) || 0
+          fiber: Number(nuts.fiber_100g) || 0,
+          tags: ''
         });
       } else {
         setScanError("Prodotto non trovato nel database globale.");
-        // Resetta form ma lascia i campi vuoti per inserimento manuale
-        setFormData({ name: '', kcal: '', carbs: '', protein: '', fat: '', fiber: '' });
+        setFormData({ name: '', kcal: '', carbs: '', protein: '', fat: '', fiber: '', tags: '' });
       }
     } catch (error) {
       console.error("Errore Fetch:", error);
@@ -197,7 +272,10 @@ const FoodManager: React.FC<FoodManagerProps> = ({
     }, { kcal: 0, carbs: 0, protein: 0, fat: 0 });
   };
 
-  const filteredFoods = foods.filter(f => f.name.toLowerCase().includes(search.toLowerCase()));
+  const filteredFoods = foods.filter(f => 
+    f.name.toLowerCase().includes(search.toLowerCase()) || 
+    (f.tags && f.tags.toLowerCase().includes(search.toLowerCase()))
+  );
   const filteredRecipes = recipes.filter(r => r.name.toLowerCase().includes(search.toLowerCase()));
 
   const inputStyle = "w-full p-3 bg-white border border-slate-300 rounded-xl outline-none focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 text-sm text-black font-bold placeholder-slate-400 transition-all";
@@ -220,25 +298,44 @@ const FoodManager: React.FC<FoodManagerProps> = ({
         </button>
       </div>
 
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-black text-black tracking-tight">
+      <div className="flex justify-between items-center gap-2">
+        <h2 className="text-2xl font-black text-black tracking-tight flex-1">
           {managerMode === 'foods' ? 'Database' : 'Ricette'}
         </h2>
-        <div className="flex gap-3">
+        <div className="flex gap-2">
           {managerMode === 'foods' && (
-            <button 
-              onClick={() => setIsScannerOpen(true)} 
-              className="p-3 bg-white text-indigo-700 rounded-2xl hover:bg-indigo-50 transition-colors border-2 border-slate-200 active:border-indigo-500 shadow-sm relative overflow-hidden"
-            >
-              <QrCodeIcon className="w-6 h-6" />
-              {isSearchingApi && (
-                <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-10">
-                   <ArrowPathIcon className="w-5 h-5 text-indigo-600 animate-spin" />
-                </div>
-              )}
-            </button>
+            <>
+              {/* Input CSV nascosto */}
+              <input 
+                 type="file" 
+                 accept=".csv" 
+                 ref={fileInputRef} 
+                 onChange={handleImportCSV} 
+                 className="hidden" 
+              />
+              
+              <button 
+                onClick={handleImportClick}
+                className="p-3 bg-slate-100 text-slate-700 rounded-2xl hover:bg-slate-200 transition-colors border border-slate-300 active:scale-95 shadow-sm"
+                title="Importa da CSV"
+              >
+                <ArrowUpTrayIcon className="w-6 h-6" />
+              </button>
+
+              <button 
+                onClick={() => setIsScannerOpen(true)} 
+                className="p-3 bg-white text-indigo-700 rounded-2xl hover:bg-indigo-50 transition-colors border-2 border-slate-200 active:border-indigo-500 shadow-sm relative overflow-hidden active:scale-95"
+              >
+                <QrCodeIcon className="w-6 h-6" />
+                {isSearchingApi && (
+                  <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-10">
+                     <ArrowPathIcon className="w-5 h-5 text-indigo-600 animate-spin" />
+                  </div>
+                )}
+              </button>
+            </>
           )}
-          <button onClick={() => { setIsFormOpen(!isFormOpen); setEditingRecipeId(null); setRecipeName(''); setRecipeIngredients([]); setScanError(null); setFormData({ name: '', kcal: '', carbs: '', protein: '', fat: '', fiber: '' }); }} className="px-5 py-3 bg-green-600 text-white text-sm font-black rounded-2xl shadow-lg flex items-center gap-2 hover:bg-green-700 transition-colors border border-green-800 uppercase tracking-widest">
+          <button onClick={() => { setIsFormOpen(!isFormOpen); setEditingRecipeId(null); setRecipeName(''); setRecipeIngredients([]); setScanError(null); setFormData({ name: '', kcal: '', carbs: '', protein: '', fat: '', fiber: '', tags: '' }); }} className="px-4 py-3 bg-green-600 text-white text-sm font-black rounded-2xl shadow-lg flex items-center gap-2 hover:bg-green-700 transition-colors border border-green-800 uppercase tracking-widest active:scale-95">
             <PlusIcon className="w-5 h-5" /> Nuovo
           </button>
         </div>
@@ -278,6 +375,20 @@ const FoodManager: React.FC<FoodManagerProps> = ({
             <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})}
               className={inputStyle} placeholder="es. Riso Basmati" />
           </div>
+          <div>
+            <label className={labelStyle}>Tag / Pasto <span className="text-slate-400 font-normal normal-case">(opzionale)</span></label>
+            <div className="relative">
+                <TagIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input 
+                    type="text" 
+                    value={formData.tags} 
+                    onChange={e => setFormData({...formData, tags: e.target.value})}
+                    className={`${inputStyle} pl-9`} 
+                    placeholder="es. pranzo, cena" 
+                />
+            </div>
+          </div>
+
           <p className="text-[10px] text-black font-bold uppercase italic border-b border-slate-100 pb-1">Valori (per 100g)</p>
           <div className="grid grid-cols-2 gap-4">
             {['kcal', 'carbs', 'protein', 'fat', 'fiber'].map(field => (
@@ -301,6 +412,7 @@ const FoodManager: React.FC<FoodManagerProps> = ({
         </form>
       )}
 
+      {/* ... Recipe Form remains unchanged but is included in the output for context if needed, but I'll skip re-rendering identical code blocks to keep it clean unless requested. Since I'm in update mode, I'll assume the Recipe Form block is preserved. Wait, I must output the FULL file content in XML. */}
       {isFormOpen && managerMode === 'recipes' && (
         <div className="bg-white p-6 rounded-3xl shadow-xl border-2 border-slate-200 space-y-5 animate-in fade-in zoom-in duration-300">
            <h3 className="text-lg font-black text-black uppercase tracking-tight">{editingRecipeId ? 'Modifica Ricetta' : 'Crea Ricetta'}</h3>
@@ -331,7 +443,6 @@ const FoodManager: React.FC<FoodManagerProps> = ({
               <label className={labelStyle}>Aggiungi Ingredienti</label>
               <div className="flex flex-col gap-3">
                  <select value={tempFoodId} onChange={(e) => setTempFoodId(e.target.value)} className={inputStyle}>
-                    {/* Removed default 'Select' option - Shows first item automatically if initialized properly */}
                     {foods.map(f => <option key={f.id} value={f.id} className="text-black font-bold">{f.name}</option>)}
                  </select>
                  <div className="flex gap-2">
@@ -423,6 +534,14 @@ const FoodManager: React.FC<FoodManagerProps> = ({
               <div key={food.id} className="bg-white p-5 rounded-3xl border border-slate-200 flex justify-between items-center group shadow-sm hover:border-indigo-300 transition-all">
                 <div className="flex-1 min-w-0">
                   <h3 className="text-[14px] font-black text-black uppercase tracking-tight truncate">{food.name}</h3>
+                  {/* Display tags if present */}
+                  {food.tags && (
+                      <div className="flex mt-1">
+                        <span className="text-[9px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 uppercase tracking-wide">
+                            {food.tags}
+                        </span>
+                      </div>
+                  )}
                   <div className="flex flex-wrap items-center gap-2 mt-2">
                     <span className="text-[10px] text-black font-black bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200">{food.kcal} KCAL</span>
                     <div className="flex items-center gap-1.5">
