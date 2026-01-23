@@ -8,21 +8,30 @@ interface HistoricalProgressProps {
   targets: MacroTargets;
   foods: Food[];
   recipes: Recipe[];
+  currentDate: Date; // Aggiunta prop
 }
 
-const HistoricalProgress: React.FC<HistoricalProgressProps> = ({ history, targets, foods, recipes }) => {
+const HistoricalProgress: React.FC<HistoricalProgressProps> = ({ history, targets, foods, recipes, currentDate }) => {
   const [activeMacro, setActiveMacro] = useState<keyof HistoryEntry>('kcal');
-  const [selectedDate, setSelectedDate] = useState<string | null>(new Date().toISOString().split('T')[0]);
+  
+  // Inizializza con currentDate invece che con new Date()
+  const [selectedDate, setSelectedDate] = useState<string | null>(currentDate.toISOString().split('T')[0]);
   const [selectedDayMeals, setSelectedDayMeals] = useState<DayMeals | null>(null);
   
   // Gestione Navigazione Settimanale
   // 0 = Settimana Corrente, -1 = Settimana Scorsa, etc.
   const [weekOffset, setWeekOffset] = useState(0);
 
-  // Calcolo Settimana Dinamica basata su weekOffset
+  // Se currentDate cambia (es. reset giorno), resetta la visualizzazione alla settimana "corrente" (offset 0) e aggiorna la selezione
+  useEffect(() => {
+    setWeekOffset(0);
+    setSelectedDate(currentDate.toISOString().split('T')[0]);
+  }, [currentDate]);
+
+  // Calcolo Settimana Dinamica basata su weekOffset e currentDate
   const { weekDays, headerString, isCurrentWeek } = useMemo(() => {
-    // 1. Determina la data "Ancora" in base all'offset
-    const anchorDate = new Date();
+    // 1. Determina la data "Ancora" in base all'offset partendo da currentDate
+    const anchorDate = new Date(currentDate);
     anchorDate.setDate(anchorDate.getDate() + (weekOffset * 7));
 
     // 2. Calcola il Lunedì della settimana relativa all'ancora
@@ -56,7 +65,7 @@ const HistoricalProgress: React.FC<HistoricalProgressProps> = ({ history, target
       headerString: `LUN ${fmt(monday)} - DOM ${fmt(sunday)} ${monthString}`,
       isCurrentWeek: weekOffset === 0
     };
-  }, [weekOffset]);
+  }, [weekOffset, currentDate]);
 
   // Preparazione Dati Settimanali (Mapping tra giorni calcolati e Storia salvata)
   const weeklyData = useMemo(() => {
@@ -227,10 +236,16 @@ const HistoricalProgress: React.FC<HistoricalProgressProps> = ({ history, target
            </div>
 
            {weeklyData.map((day) => {
+             // Controllo futuro basato su currentDate e non new Date()
+             const dayDate = new Date(day.date);
+             const today = new Date(currentDate.toISOString().split('T')[0]);
+             
              const heightPct = (day.val / maxVal) * 100;
              const isOver = day.val > config.target;
              const isSelected = selectedDate === day.date;
-             const isFuture = new Date(day.date) > new Date() && day.val === 0;
+             
+             // È futuro se la data del giorno è maggiore della data corrente dell'app
+             const isFuture = dayDate > today && day.val === 0;
              
              return (
                <div 
