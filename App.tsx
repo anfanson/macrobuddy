@@ -6,7 +6,8 @@ import {
   BookOpenIcon, 
   ClockIcon, 
   BoltIcon, 
-  MoonIcon
+  MoonIcon,
+  CalendarDaysIcon
 } from '@heroicons/react/24/outline';
 import { Food, MealEntry, MealType, DayMeals, TargetProfiles, CalculatedNutrients, HistoryEntry, TabType, Recipe } from './types';
 import ProgressBar from './components/ProgressBar';
@@ -108,6 +109,14 @@ const App: React.FC = () => {
        performDailyReset(now);
     }
   }, [performDailyReset]);
+
+  // Simulazione Cambio Giorno (Pulsante Dev)
+  const simulateDayAdvance = () => {
+     const nextDay = new Date(currentDate);
+     nextDay.setDate(nextDay.getDate() + 1); // Aggiungi 1 giorno
+     performDailyReset(nextDay);
+     alert(`Giorno avanzato a: ${nextDay.toLocaleDateString('it-IT')}. Pasti resettati e storico archiviato.`);
+  };
 
   // Effetto: Controllo Reset all'avvio e al cambio visibilità (app torna in primo piano)
   useEffect(() => {
@@ -266,6 +275,13 @@ const App: React.FC = () => {
           {/* Header Actions */}
           <div className="flex gap-2">
             <button 
+              onClick={simulateDayAdvance}
+              className="p-2 bg-slate-100 text-slate-500 rounded-full hover:bg-slate-200 hover:text-indigo-600 transition-colors shadow-sm"
+              title="Simula Domani"
+            >
+              <CalendarDaysIcon className="w-5 h-5" />
+            </button>
+            <button 
               onClick={() => setIsTrainingDay(!isTrainingDay)}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-full transition-all duration-300 font-black text-[10px] uppercase tracking-widest shadow-md ${
                 isTrainingDay 
@@ -334,7 +350,13 @@ const App: React.FC = () => {
         )}
         {activeTab === 'history' && (
           <div className="animate-in fade-in duration-300">
-            <HistoricalProgress history={history} targets={currentTargets} foods={foods} recipes={recipes} />
+            <HistoricalProgress 
+              history={history} 
+              targets={currentTargets} 
+              foods={foods} 
+              recipes={recipes} 
+              currentDate={currentDate} // Passaggio della data corrente dell'app
+            />
           </div>
         )}
         {activeTab === 'settings' && (
